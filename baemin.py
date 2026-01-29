@@ -46,7 +46,7 @@ if conn:
         st.subheader("🏢 1. 가게 정보 입력")
         with st.form("store_form", clear_on_submit=True):
             st_name = st.text_input("가게명 (예: 교촌치킨 부트캠프점)")
-            st_category = st.radio("카테고리", ["패스트푸드", "카페·디저트", "한식", "찜·탕", "도시락", "분식", "중식"], horizontal=True)
+            st_category = st.radio("카테고리", ["패스트푸드", "카페·디저트", "한식", "찜·탕", "분식", "중식"], horizontal=True)
             
             c1, c2 = st.columns(2)
             with c1:
