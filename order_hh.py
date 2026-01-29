@@ -1,0 +1,498 @@
+import streamlit as st
+import pandas as pd
+import pymysql
+import numpy as np
+from datetime import datetime
+import altair as alt
+import random
+import time
+
+# ---------------------------------------------------------
+# 1. 페이지 설정 (가장 먼저 실행되어야 함)
+# ---------------------------------------------------------
+st.set_page_config(layout="wide", page_title="점심 메뉴 취합 & 채팅", page_icon="🍚")
+
+# ---------------------------------------------------------
+# 2. [주문 & 채팅] DB 연결 및 쿼리 함수
+# ---------------------------------------------------------
+def get_db_connection():
+    return pymysql.connect(
+        host="172.30.1.12",      # DB 주소
+        user="root",           # DB 유저명
+        password="1234",   # DB 비밀번호
+        database="baemin",   # DB 이름
+        charset='utf8mb4'
+    )
+
+# --- 채팅 관련 DB 함수 ---
+
+def get_recent_chat_messages():
+    """최근 1시간 이내의 채팅 내역만 가져오기"""
+    conn = get_db_connection()
+    cursor = conn.cursor(pymysql.cursors.DictCursor)
+    query = """
+        SELECT username, message, created_at 
+        FROM chat_messages 
+        WHERE created_at >= NOW() - INTERVAL 1 HOUR 
+        ORDER BY created_at ASC
+    """
+    cursor.execute(query)
+    messages = cursor.fetchall()
+    conn.close()
+    return messages
+
+def save_chat_message(username, message):
+    """채팅 메시지 DB 저장"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    query = "INSERT INTO chat_messages (username, message) VALUES (%s, %s)"
+    cursor.execute(query, (username, message))
+    conn.commit()
+    conn.close()
+
+# --- 주문 관련 DB 함수 ---
+
+def get_categories():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT DISTINCT category FROM stores ORDER BY category")
+    categories = [row[0] for row in cursor.fetchall()]
+    conn.close()
+    return categories
+
+def get_stores(category):
+    conn = get_db_connection()
+    cursor = conn.cursor(pymysql.cursors.DictCursor)
+    query = "SELECT id, name, min_order_amount FROM stores WHERE category = %s"
+    cursor.execute(query, (category,))
+    stores = cursor.fetchall()
+    conn.close()
+    return stores
+
+def get_menus(store_id):
+    conn = get_db_connection()
+    cursor = conn.cursor(pymysql.cursors.DictCursor)
+    query = "SELECT id, menu_name, price FROM menus WHERE store_id = %s"
+    cursor.execute(query, (store_id,))
+    menus = cursor.fetchall()
+    conn.close()
+    return menus
+
+def get_current_orders():
+    conn = get_db_connection()
+    query = "SELECT id, eater_name, store_name, menu_name, price, quantity, (price * quantity) as total FROM orders ORDER BY created_at DESC"
+    df = pd.read_sql(query, conn)
+    conn.close()
+    return df
+
+def get_store_totals():
+    conn = get_db_connection()
+    query = """
+        SELECT 
+            o.store_name, 
+            SUM(o.price * o.quantity) as total,
+            s.min_order_amount
+        FROM orders o
+        JOIN stores s ON o.store_name = s.name
+        GROUP BY o.store_name, s.min_order_amount
+        ORDER BY total DESC
+    """
+    df = pd.read_sql(query, conn)
+    conn.close()
+    return df
+
+def save_order(eater, store_name, menu_name, price, quantity):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    query = """
+        INSERT INTO orders (eater_name, store_name, menu_name, price, quantity)
+        VALUES (%s, %s, %s, %s, %s)
+    """
+    cursor.execute(query, (eater, store_name, menu_name, price, quantity))
+    conn.commit()
+    conn.close()
+
+def delete_orders(order_ids):
+    if not order_ids:
+        return
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    format_strings = ','.join(['%s'] * len(order_ids))
+    query = f"DELETE FROM orders WHERE id IN ({format_strings})"
+    cursor.execute(query, tuple(order_ids))
+    conn.commit()
+    conn.close()
+
+def clear_orders():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("TRUNCATE TABLE orders")
+    conn.commit()
+    conn.close()
+
+def get_popular_store_stats():
+    """가게별 주문 건수(인기 순위) 조회"""
+    conn = get_db_connection()
+    # 주문 횟수가 많은 순서대로 정렬
+    query = """
+        SELECT store_name, COUNT(*) as order_count 
+        FROM orders 
+        GROUP BY store_name 
+        ORDER BY order_count DESC
+    """
+    df = pd.read_sql(query, conn)
+    conn.close()
+    return df
+# ---------------------------------------------------------
+# 3. [화면 구성] 왼쪽 사이드바: 채팅 영역
+# ---------------------------------------------------------
+@st.fragment(run_every=2)
+def render_chat_content():
+    st.header("💬 실시간 소통")
+    st.caption("최근 1시간 내의 대화만 표시됩니다.")
+    
+    # 닉네임 입력 (세션 스테이트로 관리)
+    if "chat_username" not in st.session_state:
+        st.session_state.chat_username = "익명"
+    
+    username = st.text_input("닉네임", value=st.session_state.chat_username, key="input_username")
+    st.session_state.chat_username = username
+    
+    # DB에서 메시지 불러오기 (1시간 이내)
+    messages = get_recent_chat_messages()
+    
+    # 채팅 내역 표시 영역
+    with st.container(height=600, border=True):
+        if not messages:
+            st.info("아직 대화가 없습니다.")
+        
+        for msg in messages:
+            # DB에서 가져온 데이터는 딕셔너리 형태 (username, message, created_at)
+            role = "user" if msg['username'] == username else "assistant"
+            
+            with st.chat_message(role, avatar="👤" if role=="user" else "👥"):
+                # 시간 표시 (HH:MM)
+                time_str = msg['created_at'].strftime("%H:%M")
+                st.markdown(f"**{msg['username']}** ({time_str})")
+                st.write(msg['message'])
+
+    # 입력창
+    if prompt := st.chat_input("메시지 입력..."):
+        if not username:
+            st.error("닉네임을 먼저 입력해주세요.")
+        else:
+            save_chat_message(username, prompt)
+            st.rerun()
+
+# 사이드바에 채팅 렌더링
+with st.sidebar:
+    render_chat_content()
+
+
+# ---------------------------------------------------------
+# 4. [화면 구성] 메인 영역: 주문 취합 시스템
+# ---------------------------------------------------------
+st.title("오늘의 점심 메뉴 취합 🍚")
+st.subheader("🔥 실시간 인기 맛집")
+
+popular_df = get_popular_store_stats()
+
+if not popular_df.empty:
+    # -------------------------------------------------------
+    # [수정 1] 축 눈금 중복(0, 1, 1, 2) 방지 계산 로직
+    # -------------------------------------------------------
+    max_order = int(popular_df['order_count'].max())
+    
+    # 주문 수가 적을 때(예: 10개 이하)는 0, 1, 2... 리스트를 강제로 만듦
+    if max_order <= 10:
+        tick_vals = list(range(max_order + 1))
+    else:
+        tick_vals = None # 많으면 자동 설정
+        
+    # -------------------------------------------------------
+    # [수정 2] 화면 분할로 "작게" 보여주기
+    # -------------------------------------------------------
+    # 왼쪽(1)은 1등 강조 텍스트, 오른쪽(2)은 차트 배치
+    col_info, col_chart = st.columns([1, 2])
+    
+    with col_info:
+        # 1등 가게 정보 추출
+        top_store = popular_df.iloc[0]['store_name']
+        top_count = popular_df.iloc[0]['order_count']
+        
+        st.info(f"🏆 현재 1등\n\n**{top_store}**\n\n({top_count}명)")
+
+    with col_chart:
+        # Altair 차트 설정
+        chart = alt.Chart(popular_df).mark_bar().encode(
+            x=alt.X('order_count', 
+                    title=None, # 차트가 작으므로 축 제목 제거 (깔끔하게)
+                    axis=alt.Axis(values=tick_vals, format='d') # [핵심] 정수 눈금 강제 적용
+            ), 
+            y=alt.Y('store_name', 
+                    sort='-x', 
+                    title=None # y축 제목 제거
+            ), 
+            color=alt.value("#FF4B4B"),
+            tooltip=['store_name', 'order_count']
+        ).properties(
+            # [핵심] 높이를 고정하지 않고, 데이터 1줄당 40픽셀로 자동 조절
+            # 가게가 적으면 차트도 작아집니다.
+            height=alt.Step(40) 
+        )
+        
+        st.altair_chart(chart, use_container_width=True)
+
+else:
+    st.info("아직 집계된 인기 순위가 없습니다.")
+
+st.divider()
+# [영역 A] 실시간 주문 현황 (자동 새로고침 적용)
+@st.fragment(run_every=2)
+def render_order_status():
+    st.subheader("📋 현재 주문 현황")
+    
+    all_orders = get_current_orders()
+    store_sums_all = get_store_totals()
+    sorted_store_names = store_sums_all['store_name'].tolist() if not store_sums_all.empty else []
+    
+    col_btn1, col_btn2, col_filter = st.columns([1, 1, 8])
+    
+    with col_btn1:
+        if st.button("새로고침 🔄", use_container_width=True):
+            st.rerun()
+    with col_btn2:
+        if st.button("전체 초기화 🗑️", type="primary", use_container_width=True):
+            clear_orders()
+            st.rerun()
+            
+    # --- [핵심 수정: 양방향 전체 선택 로직] ---
+    selected_stores = []
+    if sorted_store_names:
+        # 1. 초기 세션 상태 설정
+        if "master_checkbox" not in st.session_state:
+            st.session_state.master_checkbox = True
+        for s_name in sorted_store_names:
+            if f"filter_{s_name}" not in st.session_state:
+                st.session_state[f"filter_{s_name}"] = True
+
+        # 2. 콜백 함수 정의
+        def on_master_change():
+            """전체 체크박스 변경 시 모든 개별 체크박스 동기화"""
+            val = st.session_state.master_checkbox
+            for s_name in sorted_store_names:
+                st.session_state[f"filter_{s_name}"] = val
+
+        def on_individual_change():
+            """개별 체크박스 변경 시 전체 체크박스 상태 계산"""
+            # 모든 개별 체크박스가 True인지 확인
+            all_checked = all(st.session_state[f"filter_{s_name}"] for s_name in sorted_store_names)
+            st.session_state.master_checkbox = all_checked
+
+        with col_filter:
+            f_cols = st.columns(len(sorted_store_names) + 1)
+            
+            # 3. 전체 체크박스 생성
+            with f_cols[0]:
+                st.checkbox("전체", key="master_checkbox", on_change=on_master_change)
+            
+            # 4. 개별 체크박스 생성
+            for i, s_name in enumerate(sorted_store_names):
+                with f_cols[i+1]:
+                    if st.checkbox(s_name, key=f"filter_{s_name}", on_change=on_individual_change):
+                        selected_stores.append(s_name)
+    # ----------------------------------------
+
+    filtered_orders = all_orders[all_orders['store_name'].isin(selected_stores)] if not all_orders.empty else all_orders
+
+    if not filtered_orders.empty:
+        event = st.dataframe(
+            filtered_orders, 
+            column_config={
+                "id": None, "eater_name": "먹을 사람", "store_name": "가게",
+                "menu_name": "메뉴", "price": st.column_config.NumberColumn("단가", format="%d원"),
+                "quantity": "수량", "total": st.column_config.NumberColumn("합계", format="%d원")
+            },
+            hide_index=True, use_container_width=True, on_select="rerun", selection_mode="multi-row"
+        )
+        
+        if len(event.selection.rows) > 0:
+            selected_ids = filtered_orders.iloc[event.selection.rows]['id'].tolist()
+            if st.button(f"선택한 {len(selected_ids)}개 주문 삭제 🗑️"):
+                delete_orders(selected_ids)
+                st.rerun()
+    else:
+        st.info("선택된 주문이 없거나 체크박스가 모두 해제되어 있습니다.")
+
+    st.divider()
+    
+    st.subheader("🏪 가게별 주문 가능 여부")
+    
+    def get_status(row):
+        if row['total'] >= row['min_order_amount']:
+            return "✅ 주문 가능"
+        diff = row['min_order_amount'] - row['total']
+        return f"❌ {diff:,}원 부족"
+
+    if not store_sums_all.empty:
+        display_sums = store_sums_all.copy()
+        display_sums['상태'] = display_sums.apply(get_status, axis=1)
+        display_sums.insert(0, "선택", False)
+        display_sums.loc[display_sums['상태'].str.contains("❌"), "선택"] = None
+
+        c_table, c_roulette = st.columns([7, 3])
+        with c_table:
+            edited_df = st.data_editor(
+                display_sums,
+                column_config={
+                    "선택": st.column_config.CheckboxColumn("선택", default=False),
+                    "store_name": "가게명", "total": st.column_config.NumberColumn("합계", format="%d원"),
+                    "min_order_amount": st.column_config.NumberColumn("최소", format="%d원"),
+                },
+                disabled=["store_name", "total", "min_order_amount", "상태"],
+                hide_index=True, use_container_width=True, key="roulette_selector"
+            )
+        with c_roulette:
+            st.markdown("### 🎯 심부름 룰렛")
+            sel_rows = edited_df[edited_df["선택"] == True]
+            if len(sel_rows) == 1:
+                target = sel_rows.iloc[0]['store_name']
+                participants = all_orders[all_orders['store_name'] == target]['eater_name'].unique().tolist()
+                if participants:
+                    holder = st.empty()
+                    if st.button("룰렛 돌리기 🎰", use_container_width=True):
+                        for i in range(10):
+                            holder.subheader(f"🎲 {random.choice(participants)}")
+                            time.sleep(0.08)
+                        winner = random.choice(participants)
+                        holder.success(f"👑 {winner} 당첨!")
+                        st.balloons()
+            elif len(sel_rows) > 1:
+                st.warning("한 곳만 선택하세요.")
+            else:
+                st.info("조건에 맞는 주문이 없습니다. 상단 체크박스를 확인하거나 메뉴를 추가해 보세요!")
+
+# 프래그먼트 실행
+render_order_status()
+
+st.divider()
+# ------------------------------------------------------------------
+# 🚨 [NEW] 문어발(중복 참여) 감지 및 정리 구역
+# ------------------------------------------------------------------
+st.subheader("🕵️ 중복 참여자 점검 (문어발 단속)")
+
+# 1. 현재 성공한(최소주문금액 넘은) 가게들만 추리기
+store_sums = get_store_totals()
+if not store_sums.empty:
+    valid_stores = store_sums[store_sums['total'] >= store_sums['min_order_amount']]['store_name'].tolist()
+    
+    # 2. 성공한 가게에 들어간 주문들만 필터링
+    current_orders = get_current_orders()
+    if not current_orders.empty and valid_stores:
+        success_orders = current_orders[current_orders['store_name'].isin(valid_stores)]
+        
+        # 3. 이름(eater_name)별로 몇 개의 가게에 참여했는지 카운트
+        # value_counts()를 쓰면 이름별 등장 횟수가 나옵니다.
+        dup_check = success_orders['eater_name'].value_counts()
+        
+        # 2곳 이상 성공한 파티에 낀 사람 찾기
+        multi_eaters = dup_check[dup_check > 1].index.tolist()
+        
+        if multi_eaters:
+            st.error(f"🚨 **비상!** 아래 분들은 성공한 파티 **2곳 이상**에 포함되어 있습니다!")
+            st.write(f"대상자: **{', '.join(multi_eaters)}** (이대로 마감하면 점심값 2배 나갑니다 💸)")
+            st.info("👇 아래에서 포기할 메뉴를 하나 삭제해주세요.")
+            
+            # 중복된 사람들의 주문 내역만 보여주고 삭제 버튼 제공
+            dup_orders = success_orders[success_orders['eater_name'].isin(multi_eaters)]
+            
+            for index, row in dup_orders.iterrows():
+                # Streamlit 컬럼으로 내역과 삭제 버튼 배치
+                c1, c2, c3, c4 = st.columns([2, 2, 2, 1])
+                c1.text(row['eater_name'])
+                c2.text(row['store_name'])
+                c3.text(f"{row['menu_name']}")
+                
+                # 삭제 기능 (DELETE 쿼리 필요)
+                if c4.button("삭제❌", key=f"del_{index}"):
+                    conn = get_db_connection()
+                    with conn.cursor() as cursor:
+                        # ⚠️ 주의: 실제로는 id(Primary Key)로 지우는게 안전하지만, 
+                        # 편의상 이름+가게+메뉴로 매칭해서 지웁니다.
+                        sql = """
+                            DELETE FROM orders 
+                            WHERE eater_name=%s AND store_name=%s AND menu_name=%s LIMIT 1
+                        """
+                        cursor.execute(sql, (row['eater_name'], row['store_name'], row['menu_name']))
+                    conn.commit()
+                    conn.close()
+                    st.toast(f"{row['store_name']} 주문을 포기하셨습니다.")
+                    st.rerun()
+        else:
+            st.success("✅ 중복 참여자가 없습니다. (모두 1인 1메뉴 확정!)")
+    else:
+        st.caption("아직 최소주문금액을 달성한 파티가 없습니다.")
+# [영역 B] 메뉴 담기
+st.subheader("➕ 메뉴 담기")
+# ------------------------------------------------------------------
+# [연동] 기존 배민 데이터 매니저 앱으로 이동하기
+# ------------------------------------------------------------------
+with st.expander("🙋‍♀️ 원하는 가게나 메뉴가 없으신가요? (등록하러 가기)"):
+    st.info("아래 버튼을 누르면 **데이터 매니저(등록 페이지)**가 새 창에서 열립니다.\n\n등록 후 이 페이지를 **새로고침(F5)** 하시면 메뉴가 나타납니다!\n\n등록 후 이상있을 시 금경훈🧙‍♂️ 님을 찾도록.")
+    
+    # [중요] 두 번째 앱(데이터 매니저)이 실행 중인 주소를 적어야 합니다.
+    # 보통 두 번째로 실행하면 포트가 8502가 됩니다.
+    st.link_button("🚀 가게/메뉴 등록하러 이동하기", "http://172.30.1.12:8502")
+categories = get_categories()
+if not categories:
+    st.warning("등록된 가게/카테고리가 없습니다. DB를 확인해주세요.")
+    st.stop()
+
+selected_category = st.pills("음식점 종류", categories, selection_mode="single")
+
+if selected_category:
+    stores = get_stores(selected_category)
+    if not stores:
+        st.warning("이 카테고리에는 등록된 가게가 없습니다.")
+        st.stop()
+        
+    store_options = {store['name']: store for store in stores}
+    selected_store_name = st.selectbox("음식점 선택 🏠", list(store_options.keys()))
+    selected_store_data = store_options[selected_store_name]
+    
+    min_amt = selected_store_data['min_order_amount']
+    st.caption(f"ℹ️ 이 가게의 최소 주문 금액은 **{min_amt:,}원**입니다.")
+
+    menus = get_menus(selected_store_data['id'])
+    if not menus:
+        st.warning("이 가게에는 등록된 메뉴가 없습니다.")
+        st.stop()
+        
+    menu_options = {f"{m['menu_name']} ({m['price']:,}원)": m for m in menus}
+    selected_menu_label = st.selectbox("메뉴 선택 🍗", list(menu_options.keys()))
+    selected_menu_data = menu_options[selected_menu_label]
+
+    with st.form("order_form", clear_on_submit=True):
+        st.write(f"**{selected_menu_data['menu_name']}**을(를) 선택하셨습니다.")
+        
+        c1, c2 = st.columns(2)
+        with c1:
+            quantity = st.number_input("수량", min_value=1, value=1)
+        with c2:
+            eater_name = st.text_input("먹을 사람 (필수)")
+        
+        submitted = st.form_submit_button("주문 목록에 추가하기 ➕")
+        
+        if submitted:
+            if not eater_name:
+                st.error("'먹을 사람' 이름을 입력해주세요!")
+            else:
+                save_order(
+                    eater_name,
+                    selected_store_name,
+                    selected_menu_data['menu_name'],
+                    selected_menu_data['price'],
+                    quantity
+                )
+                st.success(f"{eater_name}님의 주문이 저장되었습니다!")
+                st.rerun()
