@@ -4,6 +4,8 @@ import pymysql
 import numpy as np
 from datetime import datetime
 import altair as alt
+import random
+import time
 
 # ---------------------------------------------------------
 # 1. 페이지 설정 (가장 먼저 실행되어야 함)
@@ -305,19 +307,65 @@ def render_order_status():
                 
         if not store_sums.empty:
             store_sums['상태'] = store_sums.apply(get_status, axis=1)
-        
-            st.dataframe(
+##############################################################################################################################    
+        # 1. 체크박스 컬럼 추가 (주문 가능할 때만 체크박스 표시를 위해 기본값 None 활용)
+        # '❌'가 포함된 행은 체크박스를 선택할 수 없도록 None(비활성화 효과) 처리
+        store_sums.insert(0, "선택", False)
+        store_sums.loc[store_sums['상태'].str.contains("❌"), "선택"] = None
+
+        col_table, col_roulette = st.columns([7, 3])
+
+        with col_table:
+            st.write("📢 **주문 가능(✅)한 가게만 선택하여 룰렛을 돌릴 수 있습니다.**")
+            edited_df = st.data_editor(
                 store_sums,
                 column_config={
+                    "선택": st.column_config.CheckboxColumn("선택", default=False),
                     "store_name": "가게명",
                     "total": st.column_config.NumberColumn("현재 합계", format="%d원"),
                     "min_order_amount": st.column_config.NumberColumn("최소주문", format="%d원"),
                     "상태": "주문 가능 여부"
                 },
+                disabled=["store_name", "total", "min_order_amount", "상태"], 
                 hide_index=True,
-                use_container_width=True
+                use_container_width=True,
+                key="store_selector"
             )
 
+        with col_roulette:
+            st.markdown("### 🎯 심부름 룰렛")
+            
+            selected_rows = edited_df[edited_df["선택"] == True]
+            
+            if len(selected_rows) > 1:
+                st.warning("⚠️ 한 곳만 선택해주세요!")
+            elif len(selected_rows) == 1:
+                target_store = selected_rows.iloc[0]['store_name']
+                
+                # [추가 보안 로직] 혹시라도 체크가 되었다면 한 번 더 검사
+                if "❌" in selected_rows.iloc[0]['상태']:
+                    st.error("금액 미달로 주문 불가한 가게입니다.")
+                else:
+                    participants = orders_df[orders_df['store_name'] == target_store]['eater_name'].unique().tolist()
+                    
+                    if participants:
+                        roulette_placeholder = st.empty()
+                        roulette_placeholder.info(f"📍 {target_store} 참여자")
+
+                        if st.button("룰렛 돌리기 🎰", use_container_width=True):
+                            for i in range(12):
+                                temp = random.choice(participants)
+                                roulette_placeholder.subheader(f"🎲 {temp}")
+                                time.sleep(0.08)
+                            
+                            final_winner = random.choice(participants)
+                            roulette_placeholder.success(f"👑 {final_winner} 당첨!")
+                            st.balloons()
+                    else:
+                        st.caption("해당 가게에 주문자가 없습니다.")
+            else:
+                st.info("가게를 선택하면 룰렛이 활성화됩니다.")
+######################################################################################################################################
     else:
         st.info("아직 주문이 없습니다. 채팅으로 메뉴를 상의하고 첫 번째 주문자가 되어보세요!")
 
