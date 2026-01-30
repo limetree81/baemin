@@ -2,6 +2,7 @@ import streamlit as st
 import pymysql
 import pandas as pd
 from datetime import time
+from db import get_categories
 
 # 1. DB 연결 함수 (경훈님 로컬 서버 설정)
 def init_db():
@@ -21,13 +22,13 @@ def init_db():
         return None
 
 # SQL 결과를 DataFrame으로 안전하게 변환하는 헬퍼 함수
-def fetch_to_df(sql, conn):
+def fetch_to_df(sql, conn, params=None):
     try:
         conn.commit() # 최신 데이터 동기화
         with conn.cursor() as cursor:
-            cursor.execute(sql)
+            # params가 있으면 함께 전달, 없으면 sql만 실행
+            cursor.execute(sql, params)
             result = cursor.fetchall()
-            # DictCursor 결과는 [{}, {}] 형태이므로 바로 DataFrame 생성이 가능하고 가장 정확합니다.
             return pd.DataFrame(result)
     except Exception as e:
         st.error(f"데이터 조회 중 오류: {e}")
@@ -83,49 +84,62 @@ if conn:
     # --- 🍱 2. 메뉴 정보 입력 섹션 ---
     with col_menu:
         st.subheader("🍱 2. 메뉴 정보 입력")
-        # 수정: fetch_to_df 함수 사용
-        
-        stores_df = fetch_to_df("SELECT id, name FROM stores ORDER BY id DESC", conn)
-        print(stores_df)
-        
-        if not stores_df.empty:
-            store_options = stores_df['id'].tolist()
-            store_labels = {row['id']: f"{row['name']}" for index, row in stores_df.iterrows()}
 
-            with st.form("menu_form", clear_on_submit=True):
+        # [수정] st.container(border=True)를 사용하여 전체 메뉴 입력 영역을 시각적으로 하나의 박스로 묶음
+        with st.container(border=True):
+            menu_filter_cat = st.selectbox("먼저 카테고리를 선택하세요", options=get_categories(), index=0)
+            
+            # 선택된 카테고리에 해당하는 식당 조회
+            stores_df = fetch_to_df(
+                "SELECT id, name FROM stores WHERE category = %s ORDER BY name ASC", 
+                conn, 
+                (menu_filter_cat,)
+            )
+
+            if not stores_df.empty:
+                store_options = stores_df['id'].tolist()
+                store_labels = {row['id']: f"{row['name']}" for index, row in stores_df.iterrows()}
+                
                 target_id = st.selectbox(
-                    "가게 선택", 
+                    f"가게 선택 ({menu_filter_cat})", 
                     options=store_options, 
                     format_func=lambda x: store_labels.get(x)
                 )
-                
-                m_name = st.text_input("메뉴명")
-                m_price = st.number_input("가격", min_value=0, step=100, value=10000)
-                submit_menu = st.form_submit_button("메뉴 등록")
-                
-                if submit_menu and m_name:
-                    try:
-                        with conn.cursor() as cursor:
-                            sql = "INSERT INTO menus (store_id, menu_name, price) VALUES (%s, %s, %s)"
-                            cursor.execute(sql, (int(target_id), m_name, m_price))
-                        conn.commit()
-                        st.toast(f"'{m_name}' 추가됨!")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"메뉴 등록 중 오류 발생: {e}")
 
-            st.divider()
-            # 수정: fetch_to_df 함수 사용
-            menu_view = fetch_to_df(f"SELECT menu_name, price FROM menus WHERE store_id = {target_id}", conn)
-            st.write(f"🔍 {store_labels[target_id]} 메뉴 목록")
-            st.dataframe(menu_view, use_container_width=True)
-        else:
-            st.info("먼저 가게를 등록해주세요.")
+                # 메뉴 이름과 가격 입력은 폼으로 구성하여 깔끔하게 정리
+                with st.form("menu_reg_form", clear_on_submit=True, border=False):
+                    m_name = st.text_input("메뉴명")
+                    m_price = st.number_input("가격", min_value=0, step=100, value=10000)
+                    submit_menu = st.form_submit_button("메뉴 등록 🍱", use_container_width=True)
+                    
+                    if submit_menu:
+                        if not m_name:
+                            st.error("메뉴명을 입력해주세요!")
+                        else:
+                            try:
+                                with conn.cursor() as cursor:
+                                    sql = "INSERT INTO menus (store_id, menu_name, price) VALUES (%s, %s, %s)"
+                                    cursor.execute(sql, (int(target_id), m_name, m_price))
+                                conn.commit()
+                                st.toast(f"✅ '{m_name}' 추가 완료!")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"메뉴 등록 중 오류 발생: {e}")
+
+                st.divider()
+                # 현재 선택된 가게의 메뉴 목록 실시간 조회
+                menu_view = fetch_to_df("SELECT menu_name, price FROM menus WHERE store_id = %s", conn, (target_id,))
+                st.write(f"🔍 **{store_labels[target_id]}** 메뉴 목록")
+                if not menu_view.empty:
+                    st.dataframe(menu_view, use_container_width=True)
+                else:
+                    st.caption("등록된 메뉴가 없습니다.")
+            else:
+                st.info(f"'{menu_filter_cat}' 카테고리에 등록된 가게가 없습니다. 먼저 가게를 등록해주세요.")
 
     # --- 📊 전체 데이터 확인 ---
     st.divider()
     if st.checkbox("전체 저장 데이터 보기"):
-        # 수정: fetch_to_df 함수 사용
         all_data_query = """
             SELECT s.id as ID, s.name as 가게명, s.category as 카테고리, s.rating as 별점, 
                    s.working_days as 영업일, CONCAT(s.open_time, '~', s.close_time) as 영업시간,
