@@ -21,14 +21,14 @@ def render_choose_menu():
             st.warning("이 카테고리에는 등록된 가게가 없습니다.")
             st.stop()
             
-        store_options = {store['name']: store for store in stores}
-        selected_store_name = st.selectbox("음식점 선택 🏠", list(store_options.keys()))
+        store_options = {s['name']: s for s in stores}
+        selected_store_name = st.selectbox("음식점 선택 🏠", options=list(store_options.keys()))
         selected_store_data = store_options[selected_store_name]
-        
+        selected_store_id = selected_store_data['id'] # 선택된 이름의 진짜 ID값
         min_amt = selected_store_data['min_order_amount']
         st.caption(f"ℹ️ 이 가게의 최소 주문 금액은 **{min_amt:,}원**입니다.")
 
-        menus = get_menus(selected_store_data['id'])
+        menus = get_menus(selected_store_id)
         if not menus:
             st.warning("이 가게에는 등록된 메뉴가 없습니다.")
             st.stop()
@@ -36,6 +36,8 @@ def render_choose_menu():
         menu_options = {f"{m['menu_name']} ({m['price']:,}원)": m for m in menus}
         selected_menu_label = st.selectbox("메뉴 선택 🍗", list(menu_options.keys()))
         selected_menu_data = menu_options[selected_menu_label]
+        selected_menu_id = selected_menu_data['id']    # DB의 menu_id 컬럼으로 들어갈 숫자
+        selected_price = selected_menu_data['price']    # DB의 price 컬럼으로 들어갈 숫자
 
         with st.form("order_form", clear_on_submit=True):
             st.write(f"**{selected_menu_data['menu_name']}**을(를) 선택하셨습니다.")
@@ -54,8 +56,8 @@ def render_choose_menu():
                 else:
                     save_order(
                         eater_name,
-                        selected_store_name,
-                        selected_menu_data['menu_name'],
+                        selected_store_id,
+                        selected_menu_id,
                         selected_menu_data['price'],
                         quantity
                     )

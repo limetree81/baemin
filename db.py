@@ -69,7 +69,20 @@ def get_menus(store_id):
 
 def get_current_orders():
     conn = get_db_connection()
-    query = "SELECT id, eater_name, store_name, menu_name, price, quantity, (price * quantity) as total FROM orders ORDER BY created_at DESC"
+    query = """
+        SELECT 
+            o.id, 
+            o.eater_name, 
+            s.name as store_name, 
+            m.menu_name, 
+            o.price, 
+            o.quantity, 
+            (o.price * o.quantity) as total 
+        FROM orders o
+        JOIN stores s ON o.store_id = s.id
+        JOIN menus m ON o.menu_id = m.id
+        ORDER BY o.created_at DESC
+    """
     df = pd.read_sql(query, conn)
     conn.close()
     return df
@@ -78,26 +91,26 @@ def get_store_totals():
     conn = get_db_connection()
     query = """
         SELECT 
-            o.store_name, 
+            s.name as store_name, 
             SUM(o.price * o.quantity) as total,
             s.min_order_amount
         FROM orders o
-        JOIN stores s ON o.store_name = s.name
-        GROUP BY o.store_name, s.min_order_amount
+        JOIN stores s ON o.store_id = s.id
+        GROUP BY s.id, s.name, s.min_order_amount
         ORDER BY total DESC
     """
     df = pd.read_sql(query, conn)
     conn.close()
     return df
 
-def save_order(eater, store_name, menu_name, price, quantity):
+def save_order(eater, store_id, menu_id, price, quantity):
     conn = get_db_connection()
     cursor = conn.cursor()
     query = """
-        INSERT INTO orders (eater_name, store_name, menu_name, price, quantity)
+        INSERT INTO orders (eater_name, store_id, menu_id, price, quantity)
         VALUES (%s, %s, %s, %s, %s)
     """
-    cursor.execute(query, (eater, store_name, menu_name, price, quantity))
+    cursor.execute(query, (eater, store_id, menu_id, price, quantity))
     conn.commit()
     conn.close()
 
@@ -124,9 +137,10 @@ def get_popular_store_stats():
     conn = get_db_connection()
     # 주문 횟수가 많은 순서대로 정렬
     query = """
-        SELECT store_name, COUNT(*) as order_count 
-        FROM orders 
-        GROUP BY store_name 
+        SELECT s.name as store_name, COUNT(*) as order_count 
+        FROM orders o
+        JOIN stores s ON o.store_id = s.id
+        GROUP BY s.id, s.name 
         ORDER BY order_count DESC
     """
     df = pd.read_sql(query, conn)
