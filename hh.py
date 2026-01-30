@@ -119,6 +119,7 @@ def render_sum_by_store():
                     participants = all_orders[all_orders['store_name'] == target]['eater_name'].unique().tolist()
                     if participants:
                         holder = st.empty()
+                        st.info("룰렛을 돌리면 결과가 채팅창에 공유됩니다.") 
                         if st.button("룰렛 돌리기 🎰", use_container_width=True):
                             for i in range(10):
                                 holder.subheader(f"🎲 {random.choice(participants)}")
