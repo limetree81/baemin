@@ -122,6 +122,12 @@ def render_sum_by_store():
                         winner = random.choice(participants)
                         holder.success(f"👑 {winner} 당첨!")
                         st.balloons()
+                        try:
+                            message = f"🎉 [룰렛 결과] **{target}** 당첨자: **{winner}**님 축하합니다! (심부름 잘 다녀오세요~ 🏃)"
+                            save_chat_message("🎲 룰렛봇", message)
+                            st.toast("채팅방에 결과가 공유되었습니다!")
+                        except Exception as e:
+                            st.error(f"결과 저장 실패: {e}")
             elif len(sel_rows) > 1:
                 st.warning("한 곳만 선택하세요.")
             else:

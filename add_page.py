@@ -46,7 +46,7 @@ if conn:
         st.subheader("🏢 1. 가게 정보 입력")
         with st.form("store_form", clear_on_submit=True):
             st_name = st.text_input("가게명 (예: 교촌치킨 부트캠프점)")
-            st_category = st.radio("카테고리", ["패스트푸드", "카페·디저트", "한식", "찜·탕", "분식", "중식"], horizontal=True)
+            st_category = st.radio("카테고리", ['패스트푸드','카페·디저트','한식','찜·탕','분식','중식','돈까스·회','피자','치킨','양식','고기','아시안','족발·보쌈'], horizontal=True)
             
             c1, c2 = st.columns(2)
             with c1:
@@ -84,6 +84,7 @@ if conn:
     with col_menu:
         st.subheader("🍱 2. 메뉴 정보 입력")
         # 수정: fetch_to_df 함수 사용
+        
         stores_df = fetch_to_df("SELECT id, name FROM stores ORDER BY id DESC", conn)
         print(stores_df)
         
