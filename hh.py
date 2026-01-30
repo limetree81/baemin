@@ -112,22 +112,26 @@ def render_sum_by_store():
             sel_rows = edited_df[edited_df["선택"] == True]
             if len(sel_rows) == 1:
                 target = sel_rows.iloc[0]['store_name']
-                participants = all_orders[all_orders['store_name'] == target]['eater_name'].unique().tolist()
-                if participants:
-                    holder = st.empty()
-                    if st.button("룰렛 돌리기 🎰", use_container_width=True):
-                        for i in range(10):
-                            holder.subheader(f"🎲 {random.choice(participants)}")
-                            time.sleep(0.08)
-                        winner = random.choice(participants)
-                        holder.success(f"👑 {winner} 당첨!")
-                        st.balloons()
-                        try:
-                            message = f"🎉 [룰렛 결과] **{target}** 당첨자: **{winner}**님 축하합니다! (심부름 잘 다녀오세요~ 🏃)"
-                            save_chat_message("🎲 룰렛봇", message)
-                            st.toast("채팅방에 결과가 공유되었습니다!")
-                        except Exception as e:
-                            st.error(f"결과 저장 실패: {e}")
+                # [추가 보안 로직] 혹시라도 체크가 되었다면 한 번 더 검사
+                if "❌" in sel_rows.iloc[0]['상태']:
+                    st.error("금액 미달로 주문 불가한 가게입니다.")
+                else:
+                    participants = all_orders[all_orders['store_name'] == target]['eater_name'].unique().tolist()
+                    if participants:
+                        holder = st.empty()
+                        if st.button("룰렛 돌리기 🎰", use_container_width=True):
+                            for i in range(10):
+                                holder.subheader(f"🎲 {random.choice(participants)}")
+                                time.sleep(0.08)
+                            winner = random.choice(participants)
+                            holder.success(f"👑 {winner} 당첨!")
+                            st.balloons()
+                            try:
+                                message = f"🎉 [룰렛 결과] **{target}** 당첨자: **{winner}**님 축하합니다! (심부름 잘 다녀오세요~ 🏃)"
+                                save_chat_message("🎲 룰렛봇", message)
+                                st.toast("채팅방에 결과가 공유되었습니다!")
+                            except Exception as e:
+                                st.error(f"결과 저장 실패: {e}")
             elif len(sel_rows) > 1:
                 st.warning("한 곳만 선택하세요.")
             else:
